@@ -348,6 +348,11 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'browser_close_tab',
+    description: 'Close this session\'s active tab. Verify the active tab with browser_list_tabs before closing it.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'browser_list_tabs',
     description: 'List all open browser tabs in this session.',
     inputSchema: { type: 'object', properties: {} },
@@ -422,6 +427,7 @@ const TOOL_TO_ACTION = {
   browser_execute_js: 'execute_js',
   browser_request_user: 'request_user',
   browser_new_tab: 'new_tab',
+  browser_close_tab: 'close_tab',
   browser_new_tab_group: 'new_tab_group',
   browser_list_tabs: 'list_tabs',
   browser_switch_tab: 'switch_tab',

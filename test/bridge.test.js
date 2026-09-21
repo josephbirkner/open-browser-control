@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const path = require('node:path');
 const { test } = require('node:test');
+const readline = require('node:readline');
 const WebSocket = require('ws');
 
 /** Exercise the real bridge on an ephemeral port without a user's browser. */
@@ -69,7 +70,28 @@ class Bridge {
     return socket;
   }
 
-
+  /** Connect the actual stdio MCP client to this isolated bridge. */
+  async mcp(t) {
+    const child = spawn(process.execPath, [path.join(__dirname, '../bridge-server/mcp-server.js')], {
+      env: { ...process.env, BRIDGE_PORT: new URL(this.url).port },
+    });
+    const responses = [];
+    let id = 0;
+    readline.createInterface({ input: child.stdout }).on('line', line => responses.push(JSON.parse(line)));
+    child.stderr.resume();
+    t.after(async () => {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+    });
+    return async (method, params = {}) => {
+      const requestId = ++id;
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }) + '\n');
+      const response = await this.next({ messages: responses }, msg => msg.id === requestId);
+      assert.equal(response.error, undefined);
+      return response.result;
+    };
+  }
 }
 
 test('accept native clients and installed-browser extension origins', async t => {
@@ -164,4 +186,37 @@ test('explicit session end closes its connection rather than leaving a usable ro
   bridge.send(agent, { type: 'session_end' });
   assert.equal((await closed)[0], 1000);
   await bridge.next(extension, msg => msg.type === 'session_end' && msg.session === 'ended');
+});
+
+test('MCP exposes close-tab and routes it to the requesting session', async t => {
+  const bridge = await new Bridge().start(t);
+  const extension = await bridge.extension();
+  const rpc = await bridge.mcp(t);
+  await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+  const list = await rpc('tools/list');
+  assert.ok(list.tools.some(tool => tool.name === 'browser_close_tab'));
+
+  // The MCP server advertises tools before its asynchronous bridge connection
+  // completes. Retry only the explicit pre-connection failure, not an action.
+  let result;
+  const incomingAction = bridge.next(extension, msg => msg.action === 'close_tab');
+  for (let attempt = 0; attempt < 5; ++attempt) {
+    const response = rpc('tools/call', { name: 'browser_close_tab', arguments: {} });
+    const outcome = await Promise.race([
+      response.then(value => ({ response: value })),
+      incomingAction.then(value => ({ action: value })),
+    ]);
+    if (outcome.action) {
+      assert.equal(typeof outcome.action.session, 'string');
+      bridge.send(extension, { type: 'result', id: outcome.action.id, session: outcome.action.session, success: true, data: { closed: true } });
+      result = await response;
+      break;
+    }
+    assert.equal(outcome.response.isError, true);
+    assert.match(outcome.response.content[0].text, /not connected/i);
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.ok(result);
+  assert.notEqual(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0].text), { closed: true });
 });
