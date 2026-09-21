@@ -89,6 +89,43 @@ Done. The extension auto-connects when your agent starts. No servers to run, no 
 
 ---
 
+## Shared Agent Setup and Skill
+
+For repeatable installations, use a reviewed, pinned package version or repository
+commit rather than resolving an unpinned package on every agent startup. A local
+checkout can be registered with each client's user-level MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "browser": {
+      "command": "node",
+      "args": ["/absolute/path/to/open-browser-control/bridge-server/mcp-server.js"]
+    }
+  }
+}
+```
+
+Run `npm ci --ignore-scripts` in that checkout first to install dependencies. This
+is sufficient for the server when the browser extension is already installed;
+`npm run build` is needed to build extensions from source. For Codex, the equivalent
+registration is `codex mcp add browser -- node /absolute/path/to/open-browser-control/bridge-server/mcp-server.js`.
+Other clients use their own MCP configuration format and user-level location.
+Reload the client after configuration changes and verify its connected tools.
+
+The reusable [Open Browser Control skill](skills/open-browser-control/SKILL.md)
+guides agents through task-scoped tabs, authenticated browser use, verified batch
+operations, and shared-bridge cleanup. Copy or symlink the entire
+`skills/open-browser-control` directory into each client's supported skill directory
+(for example, `~/.codex/skills/open-browser-control`). Installing the skill does not
+register the MCP server, grant account permissions, or start browser control.
+
+Each MCP client has its own session. Clients share the existing bridge on port
+9334, starting one if necessary. The bridge is a detached process and can remain
+running after clients exit; do not stop it while another agent uses it. Only one
+browser extension installation attaches to a bridge at a time. Separate sessions
+do not isolate website logins or concurrent mutations to shared account state.
+
 ## Local Connection Boundary
 
 The bridge listens on **127.0.0.1**, not on LAN interfaces. WebSocket upgrades must

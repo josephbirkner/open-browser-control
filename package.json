@@ -26,6 +26,7 @@
     "bridge-server/",
     "extension/",
     "extension-firefox/",
+    "skills/",
     "README.md",
     "LICENSE"
   ],

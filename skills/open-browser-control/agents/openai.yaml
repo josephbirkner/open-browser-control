@@ -1,0 +1,4 @@
+interface:
+  display_name: "Open Browser Control"
+  short_description: "Use the logged-in browser through Open Browser Control"
+  default_prompt: "Use $open-browser-control to complete the requested task in my browser."
