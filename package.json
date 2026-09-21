@@ -30,6 +30,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "test": "node --test test/*.test.js",
     "build": "webpack --mode production && npm run package-extension",
     "package-extension": "rm -rf extension extension-firefox && cp -r dist/chrome extension && cp -r dist/firefox extension-firefox",
     "dev": "webpack --mode development --watch",

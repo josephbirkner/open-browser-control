@@ -28,6 +28,23 @@ function getArg(name, defaultValue) {
 
 const PORT = parseInt(getArg('port', '9334'), 10);
 
+/** Reject remote-site WebSockets and DNS-rebinding hosts before accepting a connection. */
+function verifyLocalClient({ req }, done) {
+  const hosts = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
+  // Port 0 is useful for private test instances; the client uses the assigned port.
+  if (PORT === 0) {
+    hosts.add(`localhost:${req.socket.localPort}`);
+    hosts.add(`127.0.0.1:${req.socket.localPort}`);
+  }
+  const origin = req.headers.origin;
+  // Native MCP clients omit Origin. Browser pages (including localhost pages)
+  // must not gain access to the logged-in browser through this local service.
+  const extensionOrigin = typeof origin === 'string' &&
+    /^(chrome-extension:\/\/[a-p]{32}|moz-extension:\/\/[0-9a-f-]{36})$/.test(origin);
+  const allowed = hosts.has(req.headers.host) && (origin === undefined || extensionOrigin);
+  done(allowed, allowed ? undefined : 403, allowed ? undefined : 'Forbidden');
+}
+
 // ─── Message Validation ─────────────────────────────────────────────────────
 
 const VALID_AGENT_ACTIONS = new Set([
@@ -77,8 +94,13 @@ const PENDING_TIMEOUT_MS = 25_000; // leave margin under the agent's 30s timeout
 
 function flushPendingToExtension() {
   while (pendingForExtension.length) {
-    const { msg } = pendingForExtension.shift();
-    sendToExtension(msg);
+    const { msg, agentWs, deadline } = pendingForExtension.shift();
+    // An agent may have left while the extension was asleep. Never replay its
+    // actions after reconnect, or deliver already-expired work to the browser.
+    if (agentWs.readyState === WebSocket.OPEN && deadline > Date.now() &&
+        agentSessions.get(msg.session)?.ws === agentWs) {
+      sendToExtension(msg);
+    }
   }
 }
 
@@ -104,9 +126,9 @@ setInterval(reapExpiredPending, 1000);
 
 // ─── WebSocket Server ────────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({ port: PORT, host: '127.0.0.1', verifyClient: verifyLocalClient });
 
-log(`Bridge server listening on ws://localhost:${PORT}`);
+wss.on('listening', () => log(`Bridge server listening on ws://127.0.0.1:${wss.address().port}`));
 
 wss.on('connection', (ws) => {
   // We don't know yet if this is the extension or an agent.
@@ -186,6 +208,12 @@ wss.on('connection', (ws) => {
       if (msg.type === 'session_start') {
         const sessionId = msg.session || crypto.randomUUID().slice(0, 8);
         const name = msg.name || 'Agent';
+        // A second connection must not take over another agent's response route
+        // or remove its session when the original connection closes.
+        if (typeof sessionId !== 'string' || agentSessions.has(sessionId)) {
+          ws.close(4003, 'Session ID is invalid or already connected');
+          return;
+        }
         identified = true;
 
         agentSessions.set(sessionId, { ws, name });
@@ -231,6 +259,17 @@ wss.on('connection', (ws) => {
       // Agent → tag with session and forward to extension
       const sessionId = socketToSession.get(ws);
       if (sessionId) {
+        // Register once. A repeated handshake must not recreate the extension's
+        // tab state, and clients cannot impersonate extension events/results.
+        if (msg.type === 'session_start') {
+          ws.send(JSON.stringify({ type: 'session_started', session: sessionId, name: agentSessions.get(sessionId).name }));
+          return;
+        }
+        if (msg.type === 'session_end') {
+          ws.close(1000, 'Session ended');
+          return;
+        }
+        if (!['action', 'get_tool_schema', 'session_update', 'ping', 'pong'].includes(msg.type)) return;
         // Handle session name updates
         if (msg.type === 'session_update') {
           const session = agentSessions.get(sessionId);
@@ -267,6 +306,9 @@ wss.on('connection', (ws) => {
         log(`Agent "${session?.name}" disconnected (session: ${sessionId})`);
         agentSessions.delete(sessionId);
         socketToSession.delete(ws);
+        for (let i = pendingForExtension.length - 1; i >= 0; --i) {
+          if (pendingForExtension[i].agentWs === ws) pendingForExtension.splice(i, 1);
+        }
         sendToExtension({ type: 'session_end', session: sessionId });
       }
     }

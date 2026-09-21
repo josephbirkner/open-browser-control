@@ -89,6 +89,25 @@ Done. The extension auto-connects when your agent starts. No servers to run, no 
 
 ---
 
+## Local Connection Boundary
+
+The bridge listens on **127.0.0.1**, not on LAN interfaces. WebSocket upgrades must
+use `localhost:<port>` or `127.0.0.1:<port>` as their Host. Ordinary website Origins,
+including localhost pages and opaque (`null`) origins, are rejected; native
+clients without an Origin and Chrome/Firefox extension origins are accepted.
+These checks protect against direct network exposure, ordinary web-page access,
+and DNS rebinding. They do **not** authenticate local processes or extensions:
+native programs can forge headers, and extension origins are not pinned to an
+installation. Use this only on a trusted local machine. Do not publish the bridge
+through a reverse proxy, public port, or tunnel.
+
+Agent session IDs cannot replace another connected agent's session. Work queued
+while the extension sleeps is discarded when its agent disconnects rather than
+being replayed later against a logged-in page. Work already sent to the extension
+is not transactionally rolled back on disconnect.
+
+---
+
 ## How It Works
 
 ```
